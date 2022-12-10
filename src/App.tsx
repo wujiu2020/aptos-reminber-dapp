@@ -1,35 +1,68 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
-import { Types, AptosClient } from 'aptos';
-
-const client = new AptosClient('https://fullnode.devnet.aptoslabs.com/v1');
+import ReminderList from './components/ReminderList';
+import { Reminder } from './models/Reminder';
+import { ReminderServiceInstance, AptosInstance } from './services';
+import NewReminder from './components/NewReminder';
+import Login from './components/Login';
+import { Types } from 'aptos';
+import { hexToString } from './utils/utils'
 
 function App() {
-  // Retrieve aptos.account on initial render and store it.
-  const [address, setAddress] = React.useState<string | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [account, setAccount] = React.useState<Types.AccountData | null>(null);
-  React.useEffect(() => {
-    // 获取钱包授权
-    window.aptos!.connect()
-    window.aptos.account().then(
-      (data: { address: string }) => {
-        //判断是否获取到钱包授权
-        if (data.address === "") {
-          setAddress("nil")
-        } else {
-          setAddress(data.address)
-        }
-      });
+
+  useEffect(() => {
+    getReminderList()
     if (!address) return;
-    client.getAccount(address).then(setAccount);
+    AptosInstance.getAccount(address).then(setAccount);
   }, [address]);
+
+  const getReminderList = async () => {
+    if (!address) return;
+    const resourceType = `0x43501e1d605075a7cd7047f735224beafb6f67c30b391315ff376374f39c1109::reminder_list::ReminderList`;
+    //todo handle error
+    const addResources = await AptosInstance.getEventsByEventHandle(address, resourceType, 'reminder_add_events')
+    //todo handle error
+    const deleteResources = await AptosInstance.getEventsByEventHandle(address, resourceType, 'reminder_delete_events')
+    const tempReminders: Reminder[] = [];
+    addResources.forEach(reminder => {
+      let exitInDeleteResource = false;
+      deleteResources.forEach(
+        deleteResource => {
+          if (deleteResource?.data.id == reminder.data?.id) {
+            exitInDeleteResource = true;
+            return
+          }
+        }
+      )
+      if (!exitInDeleteResource) {
+        tempReminders.push({ id: hexToString(reminder.data.id), title: hexToString(reminder.data.title) })
+      }
+    })
+    setReminders(tempReminders)
+  }
+
+  const deleteReminder = async (id: string) => {
+    console.log(reminders, id)
+    await ReminderServiceInstance.deleteReminder(id)
+    setReminders(reminders.filter(reminder => reminder.id !== id))
+  }
+
+  const addReminder = async (title: string) => {
+    if (!account?.sequence_number) {
+      return
+    }
+    await ReminderServiceInstance.addReminder(account.sequence_number, title)
+    setReminders([{ id: account.sequence_number, title: title }, ...reminders])
+  }
 
   return (
     <div className="App">
-      <p><code>{address}</code></p>
-      {/* 现在，除了显示账户地址外，应用程序还会显示账户的sequence_number. 
-      这sequence_number表示下一个交易序列号，以防止交易重放攻击。当您使用该帐户进行交易时，您会看到这个数字在增加。 */}
-      <p><code>{account?.sequence_number}</code></p>
+      <Login address={address} onSetAddress={setAddress} />
+      <NewReminder onAddReminders={addReminder} />
+      <ReminderList iterms={reminders} onDeleteReminder={deleteReminder} />
     </div>
   );
 }
